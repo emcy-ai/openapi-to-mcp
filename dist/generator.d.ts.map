@@ -1,0 +1,1 @@
+{"version":3,"file":"generator.d.ts","sourceRoot":"","sources":["../src/generator.ts"],"names":[],"mappings":"AAAA;;GAEG;AAEH,OAAO,KAAK,EAAE,iBAAiB,EAAE,gBAAgB,EAAE,cAAc,EAAE,cAAc,EAAE,MAAM,YAAY,CAAC;AAEtG;;GAEG;AACH,wBAAgB,iBAAiB,CAC/B,KAAK,EAAE,iBAAiB,EAAE,EAC1B,OAAO,EAAE,gBAAgB,EACzB,eAAe,GAAE,MAAM,CAAC,MAAM,EAAE,cAAc,CAAM,GACnD,cAAc,CAWhB"}

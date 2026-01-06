@@ -1,0 +1,64 @@
+{
+  "name": "@emcy/openapi-to-mcp",
+  "version": "0.1.0",
+  "description": "Convert OpenAPI specifications to MCP (Model Context Protocol) servers with optional Emcy telemetry",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "openapi-to-mcp": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "openapi",
+    "swagger",
+    "ai",
+    "claude",
+    "cursor",
+    "llm",
+    "tools",
+    "api",
+    "generator",
+    "emcy"
+  ],
+  "author": "Emcy <hello@emcy.ai>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/emcy-ai/emcy.git",
+    "directory": "packages/openapi-to-mcp"
+  },
+  "homepage": "https://emcy.ai",
+  "bugs": {
+    "url": "https://github.com/emcy-ai/emcy/issues"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@apidevtools/swagger-parser": "^10.1.1",
+    "openapi-types": "^12.1.3",
+    "yaml": "^2.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.2",
+    "typescript": "^5.8.3"
+  }
+}
