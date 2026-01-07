@@ -2,7 +2,12 @@
  * Code Generator - Generates MCP server code from tool definitions
  */
 
-import type { McpToolDefinition, GeneratorOptions, GeneratedFiles, SecurityScheme } from './types.js';
+import type {
+  McpToolDefinition,
+  GeneratorOptions,
+  GeneratedFiles,
+  SecurityScheme,
+} from "./types.js";
 
 /**
  * Generate a complete MCP server from tool definitions
@@ -13,61 +18,65 @@ export function generateMcpServer(
   securitySchemes: Record<string, SecurityScheme> = {}
 ): GeneratedFiles {
   const files: GeneratedFiles = {};
-  
-  files['package.json'] = generatePackageJson(options);
-  files['tsconfig.json'] = generateTsConfig();
-  files['src/index.ts'] = generateServerEntry(tools, options, securitySchemes);
-  files['src/transport.ts'] = generateTransport();
-  files['.env.example'] = generateEnvExample(tools, securitySchemes);
-  files['README.md'] = generateReadme(options);
-  
+
+  files["package.json"] = generatePackageJson(options);
+  files["tsconfig.json"] = generateTsConfig();
+  files["src/index.ts"] = generateServerEntry(tools, options, securitySchemes);
+  files["src/transport.ts"] = generateTransport();
+  files[".env.example"] = generateEnvExample(tools, securitySchemes);
+  files["README.md"] = generateReadme(options);
+
   return files;
 }
 
 function generatePackageJson(options: GeneratorOptions): string {
   const pkg = {
     name: options.name,
-    version: options.version || '1.0.0',
+    version: options.version || "1.0.0",
     description: `MCP Server generated from OpenAPI spec`,
-    type: 'module',
-    main: 'build/index.js',
+    type: "module",
+    main: "build/index.js",
     scripts: {
-      build: 'tsc',
-      start: 'node build/index.js',
-      'start:http': 'node build/index.js --transport=streamable-http',
-      dev: 'tsc --watch',
+      build: "tsc",
+      start: "node build/index.js",
+      "start:http": "node build/index.js --transport=streamable-http",
+      dev: "tsc --watch",
     },
     dependencies: {
-      '@modelcontextprotocol/sdk': '^1.10.0',
-      axios: '^1.9.0',
-      dotenv: '^16.4.5',
-      hono: '^4.7.7',
-      '@hono/node-server': '^1.14.1',
-      ...(options.emcyEnabled ? { 
-        '@emcy/sdk': options.localSdkPath ? `file:${options.localSdkPath}` : '^0.1.0' 
-      } : {}),
+      "@modelcontextprotocol/sdk": "^1.10.0",
+      axios: "^1.9.0",
+      dotenv: "^16.4.5",
+      hono: "^4.7.7",
+      "@hono/node-server": "^1.14.1",
+      ...(options.emcyEnabled
+        ? {
+            "@emcy/sdk": options.localSdkPath
+              ? `file:${options.localSdkPath}`
+              : "^0.1.0",
+          }
+        : {}),
     },
     devDependencies: {
-      '@types/node': '^22.15.2',
-      typescript: '^5.8.3',
+      "@types/node": "^22.15.2",
+      typescript: "^5.8.3",
     },
     engines: {
-      node: '>=20.0.0',
+      node: ">=20.0.0",
     },
   };
-  
+
   return JSON.stringify(pkg, null, 2);
 }
 
 function generateTsConfig(): string {
   const config = {
     compilerOptions: {
-      target: 'ES2022',
-      module: 'NodeNext',
-      moduleResolution: 'NodeNext',
-      lib: ['ES2022'],
-      outDir: './build',
-      rootDir: './src',
+      target: "ES2022",
+      module: "NodeNext",
+      moduleResolution: "NodeNext",
+      lib: ["ES2022"],
+      outDir: "./build",
+      rootDir: "./src",
       strict: true,
       esModuleInterop: true,
       skipLibCheck: true,
@@ -75,10 +84,10 @@ function generateTsConfig(): string {
       declaration: true,
       sourceMap: true,
     },
-    include: ['src/**/*'],
-    exclude: ['node_modules', 'build'],
+    include: ["src/**/*"],
+    exclude: ["node_modules", "build"],
   };
-  
+
   return JSON.stringify(config, null, 2);
 }
 
@@ -87,23 +96,29 @@ function generateServerEntry(
   options: GeneratorOptions,
   securitySchemes: Record<string, SecurityScheme>
 ): string {
-  const toolDefinitions = tools.map(tool => {
-    return `  ["${tool.name}", {
+  const toolDefinitions = tools
+    .map((tool) => {
+      return `  ["${tool.name}", {
     name: "${tool.name}",
     description: ${JSON.stringify(tool.description)},
     inputSchema: ${JSON.stringify(tool.inputSchema)},
     method: "${tool.httpMethod}",
     pathTemplate: "${tool.pathTemplate}",
     parameters: ${JSON.stringify(tool.parameters)},
-    requestBodyContentType: ${tool.requestBodyContentType ? `"${tool.requestBodyContentType}"` : 'undefined'},
+    requestBodyContentType: ${
+      tool.requestBodyContentType
+        ? `"${tool.requestBodyContentType}"`
+        : "undefined"
+    },
     securitySchemes: ${JSON.stringify(tool.securitySchemes)},
   }]`;
-  }).join(',\n');
-  
+    })
+    .join(",\n");
+
   const emcyImport = options.emcyEnabled
     ? `import { EmcyTelemetry } from '@emcy/sdk';\n`
-    : '';
-  
+    : "";
+
   const emcyInit = options.emcyEnabled
     ? `
 // Initialize Emcy telemetry if API key is provided
@@ -121,8 +136,8 @@ if (emcy) {
   emcy.setServerInfo(SERVER_NAME, SERVER_VERSION);
 }
 `
-    : '';
-  
+    : "";
+
   const emcyTrace = options.emcyEnabled
     ? `
     // Wrap with Emcy telemetry if enabled
@@ -130,8 +145,8 @@ if (emcy) {
       return emcy.trace(toolName, async () => executeRequest(toolDefinition, toolArgs ?? {}));
     }
 `
-    : '';
-  
+    : "";
+
   return `#!/usr/bin/env node
 /**
  * MCP Server: ${options.name}
@@ -154,7 +169,7 @@ import { setupStreamableHttpServer } from "./transport.js";
 ${emcyImport}
 // Configuration
 export const SERVER_NAME = "${options.name}";
-export const SERVER_VERSION = "${options.version || '1.0.0'}";
+export const SERVER_VERSION = "${options.version || "1.0.0"}";
 export const API_BASE_URL = process.env.API_BASE_URL || "${options.baseUrl}";
 
 // Tool definition interface
@@ -170,7 +185,11 @@ interface McpToolDefinition {
 }
 
 // Security schemes
-const securitySchemes: Record<string, unknown> = ${JSON.stringify(securitySchemes, null, 2)};
+const securitySchemes: Record<string, unknown> = ${JSON.stringify(
+    securitySchemes,
+    null,
+    2
+  )};
 ${emcyInit}
 // Tool definitions
 const toolDefinitionMap: Map<string, McpToolDefinition> = new Map([
@@ -433,20 +452,20 @@ function generateEnvExample(
   securitySchemes: Record<string, SecurityScheme>
 ): string {
   const lines = [
-    '# API Configuration',
-    'API_BASE_URL=http://localhost:5001',
-    '',
-    '# Emcy Telemetry (optional)',
-    '# Set these to enable telemetry to Emcy platform',
-    '# EMCY_API_KEY=your-api-key-from-emcy-dashboard',
-    '# EMCY_TELEMETRY_URL=http://localhost:5140/api/v1/telemetry',
-    '# EMCY_MCP_SERVER_ID=mcp_xxxxxxxxxxxx',
-    '# EMCY_DEBUG=false',
-    '',
-    '# Server Port (for HTTP transport)',
-    'PORT=3000',
+    "# API Configuration",
+    "API_BASE_URL=http://localhost:5001",
+    "",
+    "# Emcy Telemetry (optional)",
+    "# Set these to enable telemetry to Emcy platform",
+    "# EMCY_API_KEY=your-api-key-from-emcy-dashboard",
+    "# EMCY_TELEMETRY_URL=http://localhost:5140/api/v1/telemetry",
+    "# EMCY_MCP_SERVER_ID=mcp_xxxxxxxxxxxx",
+    "# EMCY_DEBUG=false",
+    "",
+    "# Server Port (for HTTP transport)",
+    "PORT=3000",
   ];
-  
+
   // Collect unique security schemes used by tools
   const usedSchemes = new Set<string>();
   for (const tool of tools) {
@@ -454,26 +473,26 @@ function generateEnvExample(
       usedSchemes.add(scheme);
     }
   }
-  
+
   if (usedSchemes.size > 0) {
-    lines.push('', '# Security Credentials');
-    
+    lines.push("", "# Security Credentials");
+
     for (const schemeName of usedSchemes) {
       const scheme = securitySchemes[schemeName];
-      const envKey = schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
-      
-      if (scheme?.type === 'apiKey') {
+      const envKey = schemeName.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase();
+
+      if (scheme?.type === "apiKey") {
         lines.push(`API_KEY_${envKey}=your-api-key`);
-      } else if (scheme?.type === 'http' && scheme.scheme === 'bearer') {
+      } else if (scheme?.type === "http" && scheme.scheme === "bearer") {
         lines.push(`BEARER_TOKEN_${envKey}=your-bearer-token`);
-      } else if (scheme?.type === 'oauth2') {
+      } else if (scheme?.type === "oauth2") {
         lines.push(`OAUTH_CLIENT_ID_${envKey}=your-client-id`);
         lines.push(`OAUTH_CLIENT_SECRET_${envKey}=your-client-secret`);
       }
     }
   }
-  
-  return lines.join('\n');
+
+  return lines.join("\n");
 }
 
 function generateReadme(options: GeneratorOptions): string {
@@ -615,4 +634,3 @@ npm run build
 \`\`\`
 `;
 }
-
