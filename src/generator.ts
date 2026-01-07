@@ -127,7 +127,7 @@ if (emcy) {
     ? `
     // Wrap with Emcy telemetry if enabled
     if (emcy) {
-      return emcy.trace(toolName, async () => executeRequest(toolDefinition, toolArgs));
+      return emcy.trace(toolName, async () => executeRequest(toolDefinition, toolArgs ?? {}));
     }
 `
     : '';
@@ -312,7 +312,8 @@ main().catch(console.error);
 
 function generateTransport(): string {
   return `/**
- * Streamable HTTP Transport for MCP
+ * HTTP Transport for MCP
+ * Uses Streamable HTTP transport (MCP specification 2025-03-26)
  */
 
 import { Hono } from 'hono';
@@ -330,6 +331,7 @@ const transports: Map<string, InstanceType<typeof WebStandardStreamableHTTPServe
 export async function setupStreamableHttpServer(mcpServer: Server, port = 3000) {
   const app = new Hono();
   
+  // CORS configuration for browser/client access
   app.use('*', cors({
     origin: '*',
     allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
@@ -337,42 +339,88 @@ export async function setupStreamableHttpServer(mcpServer: Server, port = 3000) 
     exposeHeaders: ['mcp-session-id'],
   }));
   
+  // Health check endpoint
   app.get('/health', (c) => {
-    return c.json({ status: 'OK', server: SERVER_NAME, version: SERVER_VERSION });
+    return c.json({ 
+      status: 'OK', 
+      server: SERVER_NAME, 
+      version: SERVER_VERSION,
+      mcp: {
+        transport: 'streamable-http',
+        endpoints: {
+          mcp: '/mcp',
+          health: '/health'
+        }
+      }
+    });
   });
   
+  // Streamable HTTP Transport (MCP spec 2025-03-26)
+  // Supports ChatGPT, Cursor, and other modern MCP clients
   app.all("/mcp", async (c) => {
     const sessionId = c.req.header('mcp-session-id');
     
+    // Existing session
     if (sessionId && transports.has(sessionId)) {
       return transports.get(sessionId)!.handleRequest(c.req.raw);
     }
     
+    // New session - create transport
     if (!sessionId) {
       const transport = new WebStandardStreamableHTTPServerTransport({
         sessionIdGenerator: () => crypto.randomUUID(),
         onsessioninitialized: (newSessionId: string) => {
           transports.set(newSessionId, transport);
+          console.error(\`New MCP session: \${newSessionId}\`);
         }
       });
       
       transport.onerror = (err: Error) => console.error('Transport error:', err);
       transport.onclose = () => {
         const sid = transport.sessionId;
-        if (sid) transports.delete(sid);
+        if (sid) {
+          transports.delete(sid);
+          console.error(\`Session closed: \${sid}\`);
+        }
       };
       
       await mcpServer.connect(transport);
       return transport.handleRequest(c.req.raw);
     }
     
-    return c.json({ error: 'Session not found' }, 404);
+    // Session not found
+    return c.json({ 
+      error: 'Session not found',
+      message: 'The specified session ID does not exist. Start a new session by omitting the mcp-session-id header.'
+    }, 404);
+  });
+  
+  // Legacy /sse endpoint - redirect to /mcp with guidance
+  app.get("/sse", (c) => {
+    return c.json({
+      error: 'SSE transport deprecated',
+      message: 'The SSE transport was deprecated in MCP specification 2025-03-26. Please use the Streamable HTTP transport at /mcp instead.',
+      redirect: '/mcp'
+    }, 410);
   });
   
   serve({ fetch: app.fetch, port }, (info) => {
-    console.error(\`MCP Server running at http://localhost:\${info.port}\`);
-    console.error(\`- MCP Endpoint: http://localhost:\${info.port}/mcp\`);
-    console.error(\`- Health Check: http://localhost:\${info.port}/health\`);
+    console.error('');
+    console.error(\`╔═══════════════════════════════════════════════════════════════╗\`);
+    console.error(\`║  MCP Server: \${SERVER_NAME.padEnd(46)} ║\`);
+    console.error(\`╠═══════════════════════════════════════════════════════════════╣\`);
+    console.error(\`║  Status: Running                                              ║\`);
+    console.error(\`║  Port:   \${String(info.port).padEnd(53)} ║\`);
+    console.error(\`╠═══════════════════════════════════════════════════════════════╣\`);
+    console.error(\`║  Endpoints:                                                   ║\`);
+    console.error(\`║    MCP:    http://localhost:\${info.port}/mcp\`.padEnd(64) + \`║\`);
+    console.error(\`║    Health: http://localhost:\${info.port}/health\`.padEnd(64) + \`║\`);
+    console.error(\`╠═══════════════════════════════════════════════════════════════╣\`);
+    console.error(\`║  For AI Clients:                                              ║\`);
+    console.error(\`║    ChatGPT/Cursor URL: http://localhost:\${info.port}/mcp\`.padEnd(64) + \`║\`);
+    console.error(\`║    Claude Desktop: Use stdio transport (npm start)            ║\`);
+    console.error(\`╚═══════════════════════════════════════════════════════════════╝\`);
+    console.error('');
   });
   
   return app;
@@ -431,7 +479,7 @@ function generateEnvExample(
 function generateReadme(options: GeneratorOptions): string {
   return `# ${options.name}
 
-MCP Server generated from OpenAPI specification.
+MCP Server generated from OpenAPI specification by [Emcy](https://emcy.dev).
 
 ## Quick Start
 
@@ -442,7 +490,7 @@ npm install
 # Build
 npm run build
 
-# Run with HTTP transport (recommended for Cursor)
+# Run with HTTP transport (for ChatGPT, Cursor, web clients)
 npm run start:http
 
 # Or run with stdio transport (for Claude Desktop)
@@ -457,9 +505,30 @@ Copy \`.env.example\` to \`.env\` and configure:
 - \`PORT\`: Server port for HTTP transport (default: 3000)
 - Security credentials as needed
 
-## Using with Cursor
+---
 
-Add to your \`~/.cursor/mcp.json\`:
+## 🤖 AI Client Configuration
+
+### ChatGPT (OpenAI)
+
+ChatGPT supports MCP servers via Developer Mode. Use the Streamable HTTP transport:
+
+1. Start the server with HTTP transport:
+   \`\`\`bash
+   npm run start:http
+   \`\`\`
+
+2. In ChatGPT Developer Mode, add your MCP server:
+   - **URL**: \`http://your-server-url:3000/mcp\`
+   - For local development, you'll need to expose via a tunnel (ngrok, cloudflare tunnel, etc.)
+
+### Cursor IDE
+
+Cursor supports both HTTP and stdio transports:
+
+**Option A: HTTP Transport (Recommended)**
+
+Add to your project's \`.cursor/mcp.json\`:
 
 \`\`\`json
 {
@@ -471,21 +540,78 @@ Add to your \`~/.cursor/mcp.json\`:
 }
 \`\`\`
 
-Then restart Cursor.
+Then start the server: \`npm run start:http\`
 
-## Using with Claude Desktop
+**Option B: Stdio Transport**
 
-Add to your Claude Desktop config:
+Add to your project's \`.cursor/mcp.json\`:
 
 \`\`\`json
 {
   "mcpServers": {
     "${options.name}": {
       "command": "node",
-      "args": ["${process.cwd()}/build/index.js"]
+      "args": ["<absolute-path-to>/build/index.js"]
     }
   }
 }
+\`\`\`
+
+Restart Cursor after adding the configuration.
+
+### Claude Desktop
+
+Claude Desktop uses stdio transport:
+
+Add to your Claude Desktop config (\`~/Library/Application Support/Claude/claude_desktop_config.json\` on macOS):
+
+\`\`\`json
+{
+  "mcpServers": {
+    "${options.name}": {
+      "command": "node",
+      "args": ["<absolute-path-to>/build/index.js"]
+    }
+  }
+}
+\`\`\`
+
+---
+
+## Transport Endpoints
+
+When running with HTTP transport (\`npm run start:http\`):
+
+| Endpoint | Transport | Description |
+|----------|-----------|-------------|
+| \`/mcp\` | Streamable HTTP | Modern transport (MCP spec 2025-03-26). **Recommended.** |
+| \`/sse\` | Server-Sent Events | Legacy transport for older clients. |
+| \`/health\` | - | Health check endpoint. |
+
+---
+
+## Troubleshooting
+
+### "No Resources Found" in Cursor
+
+1. Make sure the server is running: \`npm run start:http\`
+2. Check the health endpoint: \`curl http://localhost:3000/health\`
+3. Verify your \`mcp.json\` path is correct
+4. Restart Cursor after configuration changes
+5. Try using stdio transport instead of HTTP
+
+### Connection Errors
+
+1. Ensure the API base URL is correct in \`.env\`
+2. Check that required API keys are set in \`.env\`
+3. Verify the target API is accessible from your machine
+
+### TypeScript Build Errors
+
+\`\`\`bash
+# Clean and rebuild
+rm -rf build/
+npm run build
 \`\`\`
 `;
 }

@@ -1,0 +1,284 @@
+/**
+ * Mapper tests - ensures endpoints are correctly mapped to MCP tool definitions
+ */
+
+import { describe, it, expect } from 'vitest';
+import { mapToMcpTools, getEndpointKey, getAllEndpointKeys } from '../mapper.js';
+import type { OpenAPIEndpoint } from '../types.js';
+
+describe('mapToMcpTools', () => {
+  it('should map a simple GET endpoint to a tool', () => {
+    const endpoints: OpenAPIEndpoint[] = [
+      {
+        operationId: 'getUsers',
+        method: 'GET',
+        path: '/users',
+        summary: 'Get all users',
+        parameters: [],
+        securitySchemes: [],
+        tags: [],
+      },
+    ];
+
+    const tools = mapToMcpTools(endpoints);
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toEqual({
+      name: 'getUsers',
+      description: 'Get all users',
+      inputSchema: { type: 'object', properties: {} },
+      httpMethod: 'get',
+      pathTemplate: '/users',
+      parameters: [],
+      requestBodyContentType: undefined,
+      securitySchemes: [],
+    });
+  });
+
+  it('should map path parameters to input schema', () => {
+    const endpoints: OpenAPIEndpoint[] = [
+      {
+        operationId: 'getUser',
+        method: 'GET',
+        path: '/users/{id}',
+        summary: 'Get user by ID',
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'integer', description: 'User ID' },
+          },
+        ],
+        securitySchemes: [],
+        tags: [],
+      },
+    ];
+
+    const tools = mapToMcpTools(endpoints);
+
+    expect(tools[0].inputSchema).toEqual({
+      type: 'object',
+      properties: {
+        id: { type: 'integer', description: 'User ID' },
+      },
+      required: ['id'],
+    });
+    expect(tools[0].parameters).toEqual([
+      { name: 'id', in: 'path', required: true, schema: { type: 'integer', description: 'User ID' } },
+    ]);
+  });
+
+  it('should map query parameters to input schema', () => {
+    const endpoints: OpenAPIEndpoint[] = [
+      {
+        operationId: 'searchUsers',
+        method: 'GET',
+        path: '/users',
+        summary: 'Search users',
+        parameters: [
+          {
+            name: 'q',
+            in: 'query',
+            required: false,
+            schema: { type: 'string' },
+            description: 'Search query',
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', default: 10 },
+          },
+        ],
+        securitySchemes: [],
+        tags: [],
+      },
+    ];
+
+    const tools = mapToMcpTools(endpoints);
+
+    expect(tools[0].inputSchema.properties).toEqual({
+      q: { type: 'string', description: 'Search query' },
+      limit: { type: 'integer', default: 10 },
+    });
+    // Neither parameter is required, so required array should not exist
+    expect(tools[0].inputSchema.required).toBeUndefined();
+  });
+
+  it('should map request body to input schema', () => {
+    const endpoints: OpenAPIEndpoint[] = [
+      {
+        operationId: 'createUser',
+        method: 'POST',
+        path: '/users',
+        summary: 'Create a user',
+        parameters: [],
+        requestBody: {
+          required: true,
+          contentType: 'application/json',
+          schema: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              email: { type: 'string' },
+            },
+            required: ['name', 'email'],
+          },
+        },
+        securitySchemes: [],
+        tags: [],
+      },
+    ];
+
+    const tools = mapToMcpTools(endpoints);
+
+    expect(tools[0].inputSchema.properties?.requestBody).toBeDefined();
+    expect(tools[0].inputSchema.required).toContain('requestBody');
+    expect(tools[0].requestBodyContentType).toBe('application/json');
+  });
+
+  it('should include description from endpoint', () => {
+    const endpoints: OpenAPIEndpoint[] = [
+      {
+        operationId: 'getUser',
+        method: 'GET',
+        path: '/users/{id}',
+        summary: 'Get user by ID',
+        description: 'Retrieves a single user by their unique identifier.',
+        parameters: [],
+        securitySchemes: [],
+        tags: [],
+      },
+    ];
+
+    const tools = mapToMcpTools(endpoints);
+
+    expect(tools[0].description).toBe('Get user by ID\n\nRetrieves a single user by their unique identifier.');
+  });
+
+  it('should generate description from path when no summary', () => {
+    const endpoints: OpenAPIEndpoint[] = [
+      {
+        operationId: 'deleteUser',
+        method: 'DELETE',
+        path: '/users/{id}',
+        parameters: [],
+        securitySchemes: [],
+        tags: [],
+      },
+    ];
+
+    const tools = mapToMcpTools(endpoints);
+
+    expect(tools[0].description).toBe('Executes DELETE /users/{id}');
+  });
+
+  it('should map multiple endpoints', () => {
+    const endpoints: OpenAPIEndpoint[] = [
+      {
+        operationId: 'getUsers',
+        method: 'GET',
+        path: '/users',
+        parameters: [],
+        securitySchemes: [],
+        tags: [],
+      },
+      {
+        operationId: 'createUser',
+        method: 'POST',
+        path: '/users',
+        parameters: [],
+        securitySchemes: [],
+        tags: [],
+      },
+      {
+        operationId: 'getUser',
+        method: 'GET',
+        path: '/users/{id}',
+        parameters: [],
+        securitySchemes: [],
+        tags: [],
+      },
+    ];
+
+    const tools = mapToMcpTools(endpoints);
+
+    expect(tools).toHaveLength(3);
+    expect(tools.map(t => t.name)).toEqual(['getUsers', 'createUser', 'getUser']);
+  });
+
+  it('should filter by enabled paths when provided', () => {
+    const endpoints: OpenAPIEndpoint[] = [
+      {
+        operationId: 'getUsers',
+        method: 'GET',
+        path: '/users',
+        parameters: [],
+        securitySchemes: [],
+        tags: [],
+      },
+      {
+        operationId: 'createUser',
+        method: 'POST',
+        path: '/users',
+        parameters: [],
+        securitySchemes: [],
+        tags: [],
+      },
+    ];
+
+    const enabledPaths = new Set(['GET:/users']);
+    const tools = mapToMcpTools(endpoints, enabledPaths);
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0].name).toBe('getUsers');
+  });
+
+  it('should preserve security schemes', () => {
+    const endpoints: OpenAPIEndpoint[] = [
+      {
+        operationId: 'getSecureData',
+        method: 'GET',
+        path: '/secure',
+        parameters: [],
+        securitySchemes: ['bearerAuth', 'apiKey'],
+        tags: [],
+      },
+    ];
+
+    const tools = mapToMcpTools(endpoints);
+
+    expect(tools[0].securitySchemes).toEqual(['bearerAuth', 'apiKey']);
+  });
+});
+
+describe('getEndpointKey', () => {
+  it('should generate correct key format', () => {
+    const endpoint: OpenAPIEndpoint = {
+      operationId: 'getUsers',
+      method: 'GET',
+      path: '/users',
+      parameters: [],
+      securitySchemes: [],
+      tags: [],
+    };
+
+    expect(getEndpointKey(endpoint)).toBe('GET:/users');
+  });
+});
+
+describe('getAllEndpointKeys', () => {
+  it('should return all endpoint keys', () => {
+    const endpoints: OpenAPIEndpoint[] = [
+      { operationId: 'a', method: 'GET', path: '/users', parameters: [], securitySchemes: [], tags: [] },
+      { operationId: 'b', method: 'POST', path: '/users', parameters: [], securitySchemes: [], tags: [] },
+      { operationId: 'c', method: 'DELETE', path: '/users/{id}', parameters: [], securitySchemes: [], tags: [] },
+    ];
+
+    const keys = getAllEndpointKeys(endpoints);
+
+    expect(keys).toEqual(['GET:/users', 'POST:/users', 'DELETE:/users/{id}']);
+  });
+});
+
