@@ -4,7 +4,7 @@
  * Converts OpenAPI specifications to MCP servers with optional Emcy telemetry.
  */
 
-export { parseOpenAPI, validateOpenAPI } from './parser.js';
+export { parseOpenAPI, validateOpenAPI, generateOperationId } from './parser.js';
 export { mapToMcpTools, getEndpointKey, getAllEndpointKeys } from './mapper.js';
 export { generateMcpServer } from './generator.js';
 

@@ -180,8 +180,22 @@ function extractSecurityScheme(scheme: OpenAPIV3.SecuritySchemeObject | OpenAPIV
   return result;
 }
 
-function generateOperationId(method: string, path: string): string {
-  // Convert path like /users/{id}/posts to UsersIdPosts
+/**
+ * Generate a consistent operationId from method and path.
+ * 
+ * IMPORTANT: This function is duplicated in:
+ *   - emcy/src/Emcy.Web/app/[lng]/components/wizard/actions.ts
+ * 
+ * Both implementations MUST stay in sync! If you modify this function,
+ * update the wizard's generateOperationId() function as well.
+ * 
+ * Examples:
+ *   GET /users -> GetUsers
+ *   GET /users/{id} -> GetUsersById
+ *   POST /orders/{orderId}/items -> PostOrdersByOrderIdItems
+ */
+export function generateOperationId(method: string, path: string): string {
+  // Convert path like /users/{id}/posts to UsersByIdPosts
   const pathParts = path
     .split('/')
     .filter(Boolean)
