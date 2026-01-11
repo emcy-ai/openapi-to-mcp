@@ -1,6 +1,10 @@
 {
   "name": "@emcy/openapi-to-mcp",
   "version": "0.1.0",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "description": "Convert OpenAPI specifications to MCP (Model Context Protocol) servers with optional Emcy telemetry",
   "type": "module",
   "main": "dist/index.js",
@@ -16,7 +20,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
@@ -45,13 +50,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/emcy-ai/emcy.git",
-    "directory": "packages/openapi-to-mcp"
+    "url": "git+https://github.com/emcy-ai/openapi-to-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/emcy-ai/openapi-to-mcp/issues"
   },
   "homepage": "https://emcy.ai",
-  "bugs": {
-    "url": "https://github.com/emcy-ai/emcy/issues"
-  },
   "engines": {
     "node": ">=20.0.0"
   },
