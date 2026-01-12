@@ -94,12 +94,23 @@ export interface GeneratorOptions {
   baseUrl: string;
   enabledEndpoints?: Set<string>;  // Optional: filter to only these operationIds
   emcyEnabled?: boolean;
-  /** 
+  /**
    * For local development: path to local @emcy/sdk package.
    * When set, generated package.json will use "file:<path>" instead of npm version.
    * Example: "../../packages/emcy-sdk" or "/absolute/path/to/emcy-sdk"
    */
   localSdkPath?: string;
+  /**
+   * MCP OAuth 2.0 configuration for client authentication.
+   * The MCP server acts as an OAuth Resource Server (RFC 9728).
+   * Clients (like ChatGPT) authenticate via the specified Authorization Server.
+   */
+  oauth2Config?: {
+    /** The Authorization Server URL that issues tokens for this MCP server */
+    authorizationServerUrl?: string;
+    /** Scopes supported by this MCP server */
+    scopes?: string[];
+  };
 }
 
 export interface GeneratedFiles {

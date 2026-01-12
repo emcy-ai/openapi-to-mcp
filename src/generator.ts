@@ -22,8 +22,8 @@ export function generateMcpServer(
   files["package.json"] = generatePackageJson(options);
   files["tsconfig.json"] = generateTsConfig();
   files["src/index.ts"] = generateServerEntry(tools, options, securitySchemes);
-  files["src/transport.ts"] = generateTransport();
-  files[".env.example"] = generateEnvExample(tools, securitySchemes);
+  files["src/transport.ts"] = generateTransport(options);
+  files[".env.example"] = generateEnvExample(tools, securitySchemes, options);
   files["README.md"] = generateReadme(options);
 
   return files;
@@ -147,6 +147,25 @@ if (emcy) {
 `
     : "";
 
+  // MCP OAuth configuration - whether this server requires OAuth authentication from clients
+  const hasMcpOAuth = options.oauth2Config?.authorizationServerUrl;
+  const mcpOAuthConfig = hasMcpOAuth
+    ? `
+// MCP OAuth 2.0 Configuration (RFC 9728 Protected Resource Metadata)
+// This MCP server acts as an OAuth Resource Server - clients must authenticate via the Authorization Server
+const MCP_OAUTH_CONFIG = {
+  // The Authorization Server URL that issues tokens for this MCP server
+  authorizationServerUrl: process.env.OAUTH_AUTHORIZATION_SERVER || ${JSON.stringify(options.oauth2Config?.authorizationServerUrl || "")},
+  // The canonical resource identifier for this MCP server
+  resourceUrl: process.env.MCP_RESOURCE_URL || \`http://localhost:\${process.env.PORT || 3000}\`,
+  // Scopes this MCP server supports
+  scopesSupported: ${JSON.stringify(options.oauth2Config?.scopes || [])},
+  // Whether to require OAuth authentication (can be disabled for development)
+  requireAuth: process.env.MCP_REQUIRE_AUTH !== 'false',
+};
+`
+    : "";
+
   return `#!/usr/bin/env node
 /**
  * MCP Server: ${options.name}
@@ -190,7 +209,7 @@ const securitySchemes: Record<string, unknown> = ${JSON.stringify(
     null,
     2
   )};
-${emcyInit}
+${mcpOAuthConfig}${emcyInit}
 // Tool definitions
 const toolDefinitionMap: Map<string, McpToolDefinition> = new Map([
 ${toolDefinitions}
@@ -253,7 +272,7 @@ async function executeRequest(
     }
   }
   
-  // Apply security (API key, Bearer token)
+  // Apply security headers for upstream API calls (API key, Bearer token, etc.)
   applySecurityHeaders(headers, def.securitySchemes);
   
   // Build request config
@@ -286,14 +305,15 @@ async function executeRequest(
   };
 }
 
-// Apply security headers based on environment variables
+// Apply security headers for upstream API authentication
+// Note: This is for authenticating to the UPSTREAM API, not for MCP client auth
 function applySecurityHeaders(headers: Record<string, string>, schemeNames: string[]) {
   for (const schemeName of schemeNames) {
     const scheme = securitySchemes[schemeName] as Record<string, unknown> | undefined;
     if (!scheme) continue;
-    
+
     const envKey = schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
-    
+
     if (scheme.type === 'apiKey') {
       const apiKey = process.env[\`API_KEY_\${envKey}\`];
       if (apiKey && scheme.in === 'header' && typeof scheme.name === 'string') {
@@ -301,6 +321,13 @@ function applySecurityHeaders(headers: Record<string, string>, schemeNames: stri
       }
     } else if (scheme.type === 'http' && scheme.scheme === 'bearer') {
       const token = process.env[\`BEARER_TOKEN_\${envKey}\`];
+      if (token) {
+        headers['authorization'] = \`Bearer \${token}\`;
+      }
+    } else if (scheme.type === 'oauth2') {
+      // For upstream OAuth APIs, use a pre-configured access token from environment
+      // The MCP server doesn't manage OAuth flows for upstream APIs - it uses static tokens
+      const token = process.env[\`OAUTH_ACCESS_TOKEN_\${envKey}\`] || process.env.UPSTREAM_ACCESS_TOKEN;
       if (token) {
         headers['authorization'] = \`Bearer \${token}\`;
       }
@@ -329,10 +356,105 @@ main().catch(console.error);
 `;
 }
 
-function generateTransport(): string {
+function generateTransport(options: GeneratorOptions): string {
+  const hasOAuth = options.oauth2Config?.authorizationServerUrl;
+
+  // OAuth-specific code blocks
+  const oauthImports = hasOAuth ? `
+// OAuth configuration from MCP_OAUTH_CONFIG in index.ts
+declare const MCP_OAUTH_CONFIG: {
+  authorizationServerUrl: string;
+  resourceUrl: string;
+  scopesSupported: string[];
+  requireAuth: boolean;
+};
+` : "";
+
+  const protectedResourceMetadataEndpoint = hasOAuth ? `
+  // OAuth 2.0 Protected Resource Metadata (RFC 9728)
+  // This endpoint tells MCP clients where to get tokens
+  app.get('/.well-known/oauth-protected-resource', (c) => {
+    const resourceUrl = MCP_OAUTH_CONFIG.resourceUrl || \`\${c.req.header('x-forwarded-proto') || 'http'}://\${c.req.header('host')}\`;
+
+    return c.json({
+      resource: resourceUrl,
+      authorization_servers: [
+        { issuer: MCP_OAUTH_CONFIG.authorizationServerUrl }
+      ],
+      scopes_supported: MCP_OAUTH_CONFIG.scopesSupported,
+      bearer_methods_supported: ['header'],
+      resource_documentation: \`\${resourceUrl}/health\`,
+    });
+  });
+` : "";
+
+  const oauthMiddleware = hasOAuth ? `
+  // OAuth token validation middleware for /mcp endpoint
+  const validateToken = async (c: any, next: any) => {
+    // Skip auth if disabled (for development)
+    if (!MCP_OAUTH_CONFIG.requireAuth) {
+      return next();
+    }
+
+    const authHeader = c.req.header('authorization');
+    const resourceMetadataUrl = \`\${c.req.header('x-forwarded-proto') || 'http'}://\${c.req.header('host')}/.well-known/oauth-protected-resource\`;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      // Return 401 with WWW-Authenticate header per MCP OAuth spec
+      return c.json(
+        {
+          error: 'unauthorized',
+          error_description: 'Bearer token required'
+        },
+        401,
+        {
+          'WWW-Authenticate': \`Bearer resource_metadata="\${resourceMetadataUrl}"\`
+        }
+      );
+    }
+
+    const token = authHeader.substring(7);
+
+    // Basic token validation - in production, verify JWT signature and claims
+    // For now, just check token exists and is not empty
+    if (!token || token.length < 10) {
+      return c.json(
+        {
+          error: 'invalid_token',
+          error_description: 'The access token is invalid or expired'
+        },
+        401,
+        {
+          'WWW-Authenticate': \`Bearer resource_metadata="\${resourceMetadataUrl}", error="invalid_token"\`
+        }
+      );
+    }
+
+    // Token appears valid - proceed
+    // Note: Production implementations should verify:
+    // - JWT signature against Authorization Server's JWKS
+    // - Token expiration (exp claim)
+    // - Audience claim matches this MCP server (aud claim)
+    // - Issuer matches configured Authorization Server (iss claim)
+    console.error(\`Request authenticated with token: \${token.substring(0, 20)}...\`);
+    return next();
+  };
+` : "";
+
+  const mcpEndpointWithAuth = hasOAuth ? `
+  // Streamable HTTP Transport (MCP spec 2025-03-26) with OAuth protection
+  app.all("/mcp", validateToken, async (c) => {` : `
+  // Streamable HTTP Transport (MCP spec 2025-03-26)
+  app.all("/mcp", async (c) => {`;
+
+  const oauthStartupMessage = hasOAuth ? `
+    console.error(\`║  OAuth:  Protected Resource Metadata available               ║\`);
+    console.error(\`║          \${('http://localhost:' + info.port + '/.well-known/oauth-protected-resource').padEnd(52)} ║\`);` : "";
+
   return `/**
  * HTTP Transport for MCP
  * Uses Streamable HTTP transport (MCP specification 2025-03-26)
+ * ${hasOAuth ? 'With OAuth 2.0 authentication (RFC 9728)' : 'No authentication configured'}
  */
 
 import { Hono } from 'hono';
@@ -340,7 +462,7 @@ import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SERVER_NAME, SERVER_VERSION } from './index.js';
-
+${oauthImports}
 const { WebStandardStreamableHTTPServerTransport } = await import(
   "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 );
@@ -349,41 +471,43 @@ const transports: Map<string, InstanceType<typeof WebStandardStreamableHTTPServe
 
 export async function setupStreamableHttpServer(mcpServer: Server, port = 3000) {
   const app = new Hono();
-  
+
   // CORS configuration for browser/client access
   app.use('*', cors({
     origin: '*',
     allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Accept', 'mcp-session-id', 'Last-Event-ID'],
-    exposeHeaders: ['mcp-session-id'],
+    allowHeaders: ['Content-Type', 'Accept', 'Authorization', 'mcp-session-id', 'Last-Event-ID'],
+    exposeHeaders: ['mcp-session-id', 'WWW-Authenticate'],
   }));
-  
+${protectedResourceMetadataEndpoint}${oauthMiddleware}
   // Health check endpoint
   app.get('/health', (c) => {
-    return c.json({ 
-      status: 'OK', 
-      server: SERVER_NAME, 
+    return c.json({
+      status: 'OK',
+      server: SERVER_NAME,
       version: SERVER_VERSION,
       mcp: {
         transport: 'streamable-http',
         endpoints: {
           mcp: '/mcp',
-          health: '/health'
-        }
+          health: '/health'${hasOAuth ? `,
+          'protected-resource-metadata': '/.well-known/oauth-protected-resource'` : ''}
+        }${hasOAuth ? `,
+        oauth: {
+          required: typeof MCP_OAUTH_CONFIG !== 'undefined' && MCP_OAUTH_CONFIG.requireAuth,
+          authorization_server: typeof MCP_OAUTH_CONFIG !== 'undefined' ? MCP_OAUTH_CONFIG.authorizationServerUrl : null
+        }` : ''}
       }
     });
   });
-  
-  // Streamable HTTP Transport (MCP spec 2025-03-26)
-  // Supports ChatGPT, Cursor, and other modern MCP clients
-  app.all("/mcp", async (c) => {
+${mcpEndpointWithAuth}
     const sessionId = c.req.header('mcp-session-id');
-    
+
     // Existing session
     if (sessionId && transports.has(sessionId)) {
       return transports.get(sessionId)!.handleRequest(c.req.raw);
     }
-    
+
     // New session - create transport
     if (!sessionId) {
       const transport = new WebStandardStreamableHTTPServerTransport({
@@ -393,7 +517,7 @@ export async function setupStreamableHttpServer(mcpServer: Server, port = 3000) 
           console.error(\`New MCP session: \${newSessionId}\`);
         }
       });
-      
+
       transport.onerror = (err: Error) => console.error('Transport error:', err);
       transport.onclose = () => {
         const sid = transport.sessionId;
@@ -402,18 +526,18 @@ export async function setupStreamableHttpServer(mcpServer: Server, port = 3000) 
           console.error(\`Session closed: \${sid}\`);
         }
       };
-      
+
       await mcpServer.connect(transport);
       return transport.handleRequest(c.req.raw);
     }
-    
+
     // Session not found
-    return c.json({ 
+    return c.json({
       error: 'Session not found',
       message: 'The specified session ID does not exist. Start a new session by omitting the mcp-session-id header.'
     }, 404);
   });
-  
+
   // Legacy /sse endpoint - redirect to /mcp with guidance
   app.get("/sse", (c) => {
     return c.json({
@@ -422,7 +546,7 @@ export async function setupStreamableHttpServer(mcpServer: Server, port = 3000) 
       redirect: '/mcp'
     }, 410);
   });
-  
+
   serve({ fetch: app.fetch, port }, (info) => {
     console.error('');
     console.error(\`╔═══════════════════════════════════════════════════════════════╗\`);
@@ -433,7 +557,7 @@ export async function setupStreamableHttpServer(mcpServer: Server, port = 3000) 
     console.error(\`╠═══════════════════════════════════════════════════════════════╣\`);
     console.error(\`║  Endpoints:                                                   ║\`);
     console.error(\`║    MCP:    http://localhost:\${info.port}/mcp\`.padEnd(64) + \`║\`);
-    console.error(\`║    Health: http://localhost:\${info.port}/health\`.padEnd(64) + \`║\`);
+    console.error(\`║    Health: http://localhost:\${info.port}/health\`.padEnd(64) + \`║\`);${oauthStartupMessage}
     console.error(\`╠═══════════════════════════════════════════════════════════════╣\`);
     console.error(\`║  For AI Clients:                                              ║\`);
     console.error(\`║    ChatGPT/Cursor URL: http://localhost:\${info.port}/mcp\`.padEnd(64) + \`║\`);
@@ -441,7 +565,7 @@ export async function setupStreamableHttpServer(mcpServer: Server, port = 3000) 
     console.error(\`╚═══════════════════════════════════════════════════════════════╝\`);
     console.error('');
   });
-  
+
   return app;
 }
 `;
@@ -449,11 +573,12 @@ export async function setupStreamableHttpServer(mcpServer: Server, port = 3000) 
 
 function generateEnvExample(
   tools: McpToolDefinition[],
-  securitySchemes: Record<string, SecurityScheme>
+  securitySchemes: Record<string, SecurityScheme>,
+  options: GeneratorOptions
 ): string {
   const lines = [
     "# API Configuration",
-    "API_BASE_URL=http://localhost:5001",
+    `API_BASE_URL=${options.baseUrl}`,
     "",
     "# Emcy Telemetry (optional)",
     "# Set these to enable telemetry to Emcy platform",
@@ -466,6 +591,17 @@ function generateEnvExample(
     "PORT=3000",
   ];
 
+  // MCP OAuth configuration - for client authentication to this MCP server
+  if (options.oauth2Config?.authorizationServerUrl) {
+    lines.push("", "# MCP OAuth 2.0 Configuration (RFC 9728)");
+    lines.push("# This MCP server acts as an OAuth Resource Server");
+    lines.push(`OAUTH_AUTHORIZATION_SERVER=${options.oauth2Config.authorizationServerUrl}`);
+    lines.push("# The public URL of this MCP server (used in Protected Resource Metadata)");
+    lines.push("# MCP_RESOURCE_URL=https://your-mcp-server.example.com");
+    lines.push("# Set to 'false' to disable OAuth authentication (for development only)");
+    lines.push("# MCP_REQUIRE_AUTH=true");
+  }
+
   // Collect unique security schemes used by tools
   const usedSchemes = new Set<string>();
   for (const tool of tools) {
@@ -474,7 +610,13 @@ function generateEnvExample(
     }
   }
 
-  if (usedSchemes.size > 0) {
+  // Add other security credentials (API keys, bearer tokens, etc.)
+  const hasNonOAuthSchemes = Array.from(usedSchemes).some(schemeName => {
+    const scheme = securitySchemes[schemeName];
+    return scheme?.type !== "oauth2";
+  });
+
+  if (hasNonOAuthSchemes) {
     lines.push("", "# Security Credentials");
 
     for (const schemeName of usedSchemes) {
@@ -485,10 +627,8 @@ function generateEnvExample(
         lines.push(`API_KEY_${envKey}=your-api-key`);
       } else if (scheme?.type === "http" && scheme.scheme === "bearer") {
         lines.push(`BEARER_TOKEN_${envKey}=your-bearer-token`);
-      } else if (scheme?.type === "oauth2") {
-        lines.push(`OAUTH_CLIENT_ID_${envKey}=your-client-id`);
-        lines.push(`OAUTH_CLIENT_SECRET_${envKey}=your-client-secret`);
       }
+      // OAuth2 is handled above with the wizard config
     }
   }
 
