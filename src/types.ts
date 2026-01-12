@@ -110,6 +110,16 @@ export interface GeneratorOptions {
     authorizationServerUrl?: string;
     /** Scopes supported by this MCP server */
     scopes?: string[];
+    /**
+     * The canonical URL of this MCP server (used for audience validation per RFC 8707).
+     * If not set, uses MCP_RESOURCE_URL environment variable at runtime.
+     */
+    resourceUrl?: string;
+    /**
+     * JWKS cache TTL in seconds. Default: 300 (5 minutes).
+     * Set to 0 to disable caching (not recommended for production).
+     */
+    jwksCacheTtlSeconds?: number;
   };
 }
 

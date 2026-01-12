@@ -55,6 +55,11 @@ function generatePackageJson(options: GeneratorOptions): string {
               : "^0.1.0",
           }
         : {}),
+      ...(options.oauth2Config?.authorizationServerUrl
+        ? {
+            jose: "^5.2.0",
+          }
+        : {}),
     },
     devDependencies: {
       "@types/node": "^22.15.2",
@@ -149,6 +154,7 @@ if (emcy) {
 
   // MCP OAuth configuration - whether this server requires OAuth authentication from clients
   const hasMcpOAuth = options.oauth2Config?.authorizationServerUrl;
+  const jwksCacheTtl = options.oauth2Config?.jwksCacheTtlSeconds ?? 300;
   const mcpOAuthConfig = hasMcpOAuth
     ? `
 // MCP OAuth 2.0 Configuration (RFC 9728 Protected Resource Metadata)
@@ -156,12 +162,14 @@ if (emcy) {
 const MCP_OAUTH_CONFIG = {
   // The Authorization Server URL that issues tokens for this MCP server
   authorizationServerUrl: process.env.OAUTH_AUTHORIZATION_SERVER || ${JSON.stringify(options.oauth2Config?.authorizationServerUrl || "")},
-  // The canonical resource identifier for this MCP server
+  // The canonical resource identifier for this MCP server (used for audience validation per RFC 8707)
   resourceUrl: process.env.MCP_RESOURCE_URL || \`http://localhost:\${process.env.PORT || 3000}\`,
   // Scopes this MCP server supports
   scopesSupported: ${JSON.stringify(options.oauth2Config?.scopes || [])},
   // Whether to require OAuth authentication (can be disabled for development)
   requireAuth: process.env.MCP_REQUIRE_AUTH !== 'false',
+  // JWKS cache TTL in seconds (default: 300 = 5 minutes)
+  jwksCacheTtlSeconds: parseInt(process.env.JWKS_CACHE_TTL_SECONDS || '${jwksCacheTtl}', 10),
 };
 `
     : "";
@@ -361,13 +369,89 @@ function generateTransport(options: GeneratorOptions): string {
 
   // OAuth-specific code blocks
   const oauthImports = hasOAuth ? `
+import * as jose from 'jose';
+
 // OAuth configuration from MCP_OAUTH_CONFIG in index.ts
 declare const MCP_OAUTH_CONFIG: {
   authorizationServerUrl: string;
   resourceUrl: string;
   scopesSupported: string[];
   requireAuth: boolean;
+  jwksCacheTtlSeconds: number;
 };
+
+// JWKS cache for JWT validation
+interface JwksCacheEntry {
+  jwks: jose.JWTVerifyGetKey;
+  expiresAt: number;
+}
+let jwksCache: JwksCacheEntry | null = null;
+
+async function getJwks(): Promise<jose.JWTVerifyGetKey> {
+  const now = Date.now();
+
+  // Return cached JWKS if still valid
+  if (jwksCache && jwksCache.expiresAt > now) {
+    return jwksCache.jwks;
+  }
+
+  // Fetch fresh JWKS from Authorization Server
+  const jwksUrl = new URL(\`\${MCP_OAUTH_CONFIG.authorizationServerUrl}/.well-known/jwks.json\`);
+  const jwks = jose.createRemoteJWKSet(jwksUrl);
+
+  // Cache the JWKS
+  jwksCache = {
+    jwks,
+    expiresAt: now + (MCP_OAUTH_CONFIG.jwksCacheTtlSeconds * 1000),
+  };
+
+  console.error(\`JWKS fetched from \${jwksUrl} (cached for \${MCP_OAUTH_CONFIG.jwksCacheTtlSeconds}s)\`);
+  return jwks;
+}
+
+interface TokenValidationResult {
+  valid: boolean;
+  error?: string;
+  errorDescription?: string;
+  payload?: jose.JWTPayload;
+}
+
+async function validateJwt(token: string): Promise<TokenValidationResult> {
+  try {
+    const jwks = await getJwks();
+
+    const { payload } = await jose.jwtVerify(token, jwks, {
+      issuer: MCP_OAUTH_CONFIG.authorizationServerUrl,
+      audience: MCP_OAUTH_CONFIG.resourceUrl,
+    });
+
+    return { valid: true, payload };
+  } catch (error) {
+    if (error instanceof jose.errors.JWTExpired) {
+      return { valid: false, error: 'invalid_token', errorDescription: 'The access token has expired' };
+    }
+    if (error instanceof jose.errors.JWTClaimValidationFailed) {
+      const claim = (error as jose.errors.JWTClaimValidationFailed).claim;
+      if (claim === 'aud') {
+        return { valid: false, error: 'invalid_token', errorDescription: 'Token audience does not match this resource server' };
+      }
+      if (claim === 'iss') {
+        return { valid: false, error: 'invalid_token', errorDescription: 'Token issuer is not trusted' };
+      }
+      return { valid: false, error: 'invalid_token', errorDescription: \`Token claim validation failed: \${claim}\` };
+    }
+    if (error instanceof jose.errors.JWSSignatureVerificationFailed) {
+      return { valid: false, error: 'invalid_token', errorDescription: 'Token signature verification failed' };
+    }
+    if (error instanceof jose.errors.JWKSNoMatchingKey) {
+      return { valid: false, error: 'invalid_token', errorDescription: 'No matching key found to verify token signature' };
+    }
+
+    // Generic error
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return { valid: false, error: 'invalid_token', errorDescription: \`Token validation failed: \${message}\` };
+  }
+}
 ` : "";
 
   const protectedResourceMetadataEndpoint = hasOAuth ? `
@@ -390,6 +474,7 @@ declare const MCP_OAUTH_CONFIG: {
 
   const oauthMiddleware = hasOAuth ? `
   // OAuth token validation middleware for /mcp endpoint
+  // Implements full JWT validation per MCP spec 2025-06-18 and RFC 8707
   const validateToken = async (c: any, next: any) => {
     // Skip auth if disabled (for development)
     if (!MCP_OAUTH_CONFIG.requireAuth) {
@@ -415,13 +500,11 @@ declare const MCP_OAUTH_CONFIG: {
 
     const token = authHeader.substring(7);
 
-    // Basic token validation - in production, verify JWT signature and claims
-    // For now, just check token exists and is not empty
-    if (!token || token.length < 10) {
+    if (!token) {
       return c.json(
         {
           error: 'invalid_token',
-          error_description: 'The access token is invalid or expired'
+          error_description: 'Empty token provided'
         },
         401,
         {
@@ -430,13 +513,26 @@ declare const MCP_OAUTH_CONFIG: {
       );
     }
 
-    // Token appears valid - proceed
-    // Note: Production implementations should verify:
-    // - JWT signature against Authorization Server's JWKS
-    // - Token expiration (exp claim)
-    // - Audience claim matches this MCP server (aud claim)
-    // - Issuer matches configured Authorization Server (iss claim)
-    console.error(\`Request authenticated with token: \${token.substring(0, 20)}...\`);
+    // Full JWT validation: signature, expiration, issuer, and audience
+    const validationResult = await validateJwt(token);
+
+    if (!validationResult.valid) {
+      console.error(\`Token validation failed: \${validationResult.errorDescription}\`);
+      return c.json(
+        {
+          error: validationResult.error,
+          error_description: validationResult.errorDescription
+        },
+        401,
+        {
+          'WWW-Authenticate': \`Bearer resource_metadata="\${resourceMetadataUrl}", error="\${validationResult.error}"\`
+        }
+      );
+    }
+
+    // Token is valid - log and proceed
+    const sub = validationResult.payload?.sub || 'unknown';
+    console.error(\`Request authenticated: sub=\${sub}, token=\${token.substring(0, 20)}...\`);
     return next();
   };
 ` : "";
@@ -596,10 +692,12 @@ function generateEnvExample(
     lines.push("", "# MCP OAuth 2.0 Configuration (RFC 9728)");
     lines.push("# This MCP server acts as an OAuth Resource Server");
     lines.push(`OAUTH_AUTHORIZATION_SERVER=${options.oauth2Config.authorizationServerUrl}`);
-    lines.push("# The public URL of this MCP server (used in Protected Resource Metadata)");
-    lines.push("# MCP_RESOURCE_URL=https://your-mcp-server.example.com");
+    lines.push("# The public URL of this MCP server (REQUIRED for audience validation per RFC 8707)");
+    lines.push("MCP_RESOURCE_URL=https://your-mcp-server.example.com");
     lines.push("# Set to 'false' to disable OAuth authentication (for development only)");
     lines.push("# MCP_REQUIRE_AUTH=true");
+    lines.push("# JWKS cache TTL in seconds (default: 300 = 5 minutes)");
+    lines.push("# JWKS_CACHE_TTL_SECONDS=300");
   }
 
   // Collect unique security schemes used by tools
