@@ -7,6 +7,7 @@ import type {
   GeneratorOptions,
   GeneratedFiles,
   SecurityScheme,
+  PromptDefinition,
 } from "./types.js";
 
 /**
@@ -174,6 +175,89 @@ const MCP_OAUTH_CONFIG = {
 `
     : "";
 
+  // Generate prompts code if prompts are configured
+  const hasPrompts = options.prompts && options.prompts.length > 0;
+  const promptsImport = hasPrompts
+    ? `,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
+  type GetPromptResult`
+    : "";
+
+  const promptDefinitions = hasPrompts
+    ? `
+
+// Prompt definitions
+interface PromptDef {
+  name: string;
+  title?: string;
+  description: string;
+  content: string;
+  arguments?: { name: string; description: string; required: boolean }[];
+}
+
+const promptDefinitionMap: Map<string, PromptDef> = new Map([
+${options.prompts!
+  .map(
+    (prompt) => `  ["${prompt.name}", {
+    name: "${prompt.name}",
+    ${prompt.title ? `title: ${JSON.stringify(prompt.title)},` : ""}
+    description: ${JSON.stringify(prompt.description)},
+    content: ${JSON.stringify(prompt.content)},
+    ${prompt.arguments ? `arguments: ${JSON.stringify(prompt.arguments)},` : ""}
+  }]`
+  )
+  .join(",\n")}
+]);`
+    : "";
+
+  const promptsCapability = hasPrompts ? ", prompts: {}" : "";
+
+  const promptHandlers = hasPrompts
+    ? `
+
+// List prompts handler
+server.setRequestHandler(ListPromptsRequestSchema, async () => {
+  const promptsForClient = Array.from(promptDefinitionMap.values()).map(def => ({
+    name: def.name,
+    title: def.title,
+    description: def.description,
+    arguments: def.arguments,
+  }));
+  return { prompts: promptsForClient };
+});
+
+// Get prompt handler
+server.setRequestHandler(GetPromptRequestSchema, async (request): Promise<GetPromptResult> => {
+  const { name, arguments: args } = request.params;
+  const promptDef = promptDefinitionMap.get(name);
+  
+  if (!promptDef) {
+    throw new Error(\`Unknown prompt: \${name}\`);
+  }
+  
+  // Replace argument placeholders in content
+  let content = promptDef.content;
+  if (args && promptDef.arguments) {
+    for (const argDef of promptDef.arguments) {
+      const value = args[argDef.name];
+      if (value !== undefined) {
+        content = content.replace(new RegExp(\`{{\\\\s*\${argDef.name}\\\\s*}}\`, 'g'), String(value));
+      } else if (argDef.required) {
+        throw new Error(\`Missing required argument: \${argDef.name}\`);
+      }
+    }
+  }
+  
+  return {
+    messages: [{
+      role: "user",
+      content: { type: "text", text: content }
+    }]
+  };
+});`
+    : "";
+
   return `#!/usr/bin/env node
 /**
  * MCP Server: ${options.name}
@@ -189,7 +273,7 @@ import {
   ListToolsRequestSchema,
   type Tool,
   type CallToolResult,
-  type CallToolRequest
+  type CallToolRequest${promptsImport}
 } from "@modelcontextprotocol/sdk/types.js";
 import axios, { type AxiosRequestConfig, type AxiosError } from 'axios';
 import { setupStreamableHttpServer } from "./transport.js";
@@ -222,11 +306,12 @@ ${mcpOAuthConfig}${emcyInit}
 const toolDefinitionMap: Map<string, McpToolDefinition> = new Map([
 ${toolDefinitions}
 ]);
+${promptDefinitions}
 
 // Create MCP server
 const server = new Server(
   { name: SERVER_NAME, version: SERVER_VERSION },
-  { capabilities: { tools: {} } }
+  { capabilities: { tools: {}${promptsCapability} } }
 );
 
 // List tools handler
@@ -256,6 +341,7 @@ ${emcyTrace}
     return { content: [{ type: "text", text: \`Error: \${message}\` }] };
   }
 });
+${promptHandlers}
 
 // Execute API request
 async function executeRequest(
@@ -734,10 +820,24 @@ function generateEnvExample(
 }
 
 function generateReadme(options: GeneratorOptions): string {
+  const hasPrompts = options.prompts && options.prompts.length > 0;
+  const promptsSection = hasPrompts
+    ? `
+
+## Context Prompts
+
+This MCP server includes ${options.prompts!.length} pre-defined prompt(s) to help AI understand your domain:
+
+${options.prompts!.map((p) => `- **${p.name}**: ${p.description}`).join("\n")}
+
+Prompts are automatically available to AI clients via the MCP prompts protocol.
+`
+    : "";
+
   return `# ${options.name}
 
 MCP Server generated from OpenAPI specification by [Emcy](https://emcy.dev).
-
+${promptsSection}
 ## Quick Start
 
 \`\`\`bash

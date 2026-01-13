@@ -88,6 +88,36 @@ export interface OAuthFlow {
   scopes: Record<string, string>;
 }
 
+/**
+ * MCP Prompt Definition
+ * Per MCP specification: https://modelcontextprotocol.io/specification/2025-06-18/server/prompts
+ * Prompts are pre-defined templates that help users accomplish specific tasks.
+ */
+export interface PromptDefinition {
+  /** Unique identifier for the prompt */
+  name: string;
+  /** Human-readable title for the prompt */
+  title?: string;
+  /** Description of what this prompt does */
+  description: string;
+  /** The prompt content (text that will be sent to the AI) */
+  content: string;
+  /**
+   * Optional arguments for dynamic prompts.
+   * When provided, the prompt becomes a template with {{argName}} placeholders.
+   */
+  arguments?: PromptArgument[];
+}
+
+export interface PromptArgument {
+  /** Argument name (used as placeholder in content: {{name}}) */
+  name: string;
+  /** Description of the argument */
+  description: string;
+  /** Whether this argument is required */
+  required: boolean;
+}
+
 export interface GeneratorOptions {
   name: string;
   version?: string;
@@ -121,6 +151,12 @@ export interface GeneratorOptions {
      */
     jwksCacheTtlSeconds?: number;
   };
+  /**
+   * MCP Prompts configuration.
+   * Prompts are pre-defined templates that help AI understand context and accomplish specific tasks.
+   * These are exposed via the prompts/list and prompts/get MCP endpoints.
+   */
+  prompts?: PromptDefinition[];
 }
 
 export interface GeneratedFiles {
