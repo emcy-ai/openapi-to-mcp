@@ -88,18 +88,75 @@ export interface OAuthFlow {
   scopes: Record<string, string>;
 }
 
+/**
+ * MCP Prompt Definition
+ * Per MCP specification: https://modelcontextprotocol.io/specification/2025-06-18/server/prompts
+ * Prompts are pre-defined templates that help users accomplish specific tasks.
+ */
+export interface PromptDefinition {
+  /** Unique identifier for the prompt */
+  name: string;
+  /** Human-readable title for the prompt */
+  title?: string;
+  /** Description of what this prompt does */
+  description: string;
+  /** The prompt content (text that will be sent to the AI) */
+  content: string;
+  /**
+   * Optional arguments for dynamic prompts.
+   * When provided, the prompt becomes a template with {{argName}} placeholders.
+   */
+  arguments?: PromptArgument[];
+}
+
+export interface PromptArgument {
+  /** Argument name (used as placeholder in content: {{name}}) */
+  name: string;
+  /** Description of the argument */
+  description: string;
+  /** Whether this argument is required */
+  required: boolean;
+}
+
 export interface GeneratorOptions {
   name: string;
   version?: string;
   baseUrl: string;
   enabledEndpoints?: Set<string>;  // Optional: filter to only these operationIds
   emcyEnabled?: boolean;
-  /** 
+  /**
    * For local development: path to local @emcy/sdk package.
    * When set, generated package.json will use "file:<path>" instead of npm version.
    * Example: "../../packages/emcy-sdk" or "/absolute/path/to/emcy-sdk"
    */
   localSdkPath?: string;
+  /**
+   * MCP OAuth 2.0 configuration for client authentication.
+   * The MCP server acts as an OAuth Resource Server (RFC 9728).
+   * Clients (like ChatGPT) authenticate via the specified Authorization Server.
+   */
+  oauth2Config?: {
+    /** The Authorization Server URL that issues tokens for this MCP server */
+    authorizationServerUrl?: string;
+    /** Scopes supported by this MCP server */
+    scopes?: string[];
+    /**
+     * The canonical URL of this MCP server (used for audience validation per RFC 8707).
+     * If not set, uses MCP_RESOURCE_URL environment variable at runtime.
+     */
+    resourceUrl?: string;
+    /**
+     * JWKS cache TTL in seconds. Default: 300 (5 minutes).
+     * Set to 0 to disable caching (not recommended for production).
+     */
+    jwksCacheTtlSeconds?: number;
+  };
+  /**
+   * MCP Prompts configuration.
+   * Prompts are pre-defined templates that help AI understand context and accomplish specific tasks.
+   * These are exposed via the prompts/list and prompts/get MCP endpoints.
+   */
+  prompts?: PromptDefinition[];
 }
 
 export interface GeneratedFiles {

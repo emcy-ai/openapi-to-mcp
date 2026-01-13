@@ -40,6 +40,7 @@ GENERATE OPTIONS:
   --version       Version string for the server (default: from spec)
   --force, -f     Overwrite existing output directory
   --local-sdk     Path to local @emcy/sdk for development (uses file: reference)
+  --prompts-json  JSON array of prompt definitions for MCP prompts feature
 
 EXAMPLES:
   # Generate from a URL
@@ -128,6 +129,7 @@ async function runGenerate(args: string[]) {
       version: { type: 'string' },
       force: { type: 'boolean', short: 'f', default: false },
       'local-sdk': { type: 'string' },  // Path to local @emcy/sdk for dev
+      'prompts-json': { type: 'string' },  // JSON array of prompt definitions
     },
     allowPositionals: false,
   });
@@ -167,11 +169,28 @@ async function runGenerate(args: string[]) {
       process.exit(1);
     }
 
+    // Parse prompts if provided
+    let prompts: { name: string; title?: string; description: string; content: string }[] | undefined;
+    if (values['prompts-json']) {
+      try {
+        prompts = JSON.parse(values['prompts-json']);
+        if (!Array.isArray(prompts)) {
+          throw new Error('prompts-json must be a JSON array');
+        }
+      } catch (error) {
+        console.error('Error parsing --prompts-json:', error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    }
+
     console.log(`\nGenerating MCP server: ${serverName}`);
     console.log(`  Output: ${resolvedOutput}`);
     console.log(`  Emcy Telemetry: ${values.emcy ? 'enabled' : 'disabled'}`);
     if (values['local-sdk']) {
       console.log(`  Local SDK: ${values['local-sdk']}`);
+    }
+    if (prompts && prompts.length > 0) {
+      console.log(`  Prompts: ${prompts.length} prompt(s) configured`);
     }
 
     // Generate the server
@@ -181,6 +200,7 @@ async function runGenerate(args: string[]) {
       baseUrl: values['base-url'] || parsed.baseUrl || 'http://localhost:3000',
       emcyEnabled: values.emcy || false,
       localSdkPath: values['local-sdk'],
+      prompts: prompts,
     }, parsed.securitySchemes);
 
     // Write files
